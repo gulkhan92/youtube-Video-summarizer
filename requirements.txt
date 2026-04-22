@@ -1,0 +1,19 @@
+# Core Framework
+streamlit==1.28.1
+
+# YouTube Processing
+youtube-transcript-api==0.6.1
+
+# Video/Audio Processing
+moviepy==1.0.3
+openai-whisper==20231117
+
+# Cloud LLM APIs
+google-generativeai==0.3.2
+openai==1.6.1
+
+# Utilities
+python-dotenv==1.0.0
+
+# Optional: Better progress bars in terminal
+rich==13.7.0

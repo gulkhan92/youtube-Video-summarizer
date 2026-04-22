@@ -1,0 +1,7 @@
+# Core dependencies (excludes problematic whisper/moviepy)
+streamlit>=1.38.0
+youtube-transcript-api
+google-generativeai
+openai
+python-dotenv
+rich
