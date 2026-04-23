@@ -5,6 +5,8 @@ A Streamlit application for summarizing YouTube videos and uploaded video files
 
 import streamlit as st
 import sys
+import os
+import tempfile
 from pathlib import Path
 
 # Add modules to path
@@ -13,7 +15,10 @@ sys.path.append(str(Path(__file__).parent))
 # Import modules
 from modules.youtube import fetch_youtube_transcript, InvalidURLError, TranscriptUnavailableError
 from modules.file_processor import process_uploaded_file, SUPPORTED_FORMATS
+import shutil
+
 from modules.summarizer import summarize_text, get_summarizer
+
 from modules.utils import (
     clean_transcript, 
     get_cache_key, 
@@ -27,11 +32,12 @@ from modules.utils import (
 
 # Page configuration must be the first Streamlit command
 st.set_page_config(
-    page_title="Video Summarizer Pro",
+    page_title="Video Summarizer Pro - 10GB Upload Fixed",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 
 # Custom CSS for professional look
 st.markdown("""
@@ -339,38 +345,94 @@ def process_youtube_video(url: str):
 
 
 def display_file_upload_tab():
-    """Display file upload tab"""
-    st.markdown("### 📁 Upload Video File")
+    """Display file upload tab - with error handling"""
+    st.markdown("### 📁 Upload Video File (Max 10GB)")
     
-    # File uploader
-    uploaded_file = st.file_uploader(
-        "Choose a video file",
-        type=['mp4', 'mov', 'avi', 'mkv', 'webm'],
-        help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}"
-    )
-    
-    if uploaded_file:
-        # Show file info
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Filename", uploaded_file.name[:30] + "..." if len(uploaded_file.name) > 30 else uploaded_file.name)
-        with col2:
-            file_size_mb = uploaded_file.size / (1024 * 1024)
-            st.metric("Size", f"{file_size_mb:.1f} MB")
-        with col3:
-            st.metric("Format", uploaded_file.name.split('.')[-1].upper())
+    try:
+        # Production file uploader
+        uploaded_file = st.file_uploader(
+            "Choose a video file (up to 10GB supported)",
+            type=list(SUPPORTED_FORMATS),
+            help="Supported: MP4, MOV, AVI, MKV, WebM"
+        )
         
-        if st.button("🎯 Summarize Video", key="file_btn", use_container_width=True):
-            process_uploaded_video(uploaded_file, file_size_mb)
+        if uploaded_file is not None:
+            # File metrics always shown
+            file_size_gb = uploaded_file.size / (1024**3)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("File", uploaded_file.name)
+            with col2:
+                st.metric("Size", f"{file_size_gb:.2f} GB")
+            with col3:
+                st.metric("Type", uploaded_file.type or "Unknown")
+            
+            if file_size_gb > 10:
+                st.error("❌ File exceeds 10GB limit")
+                st.stop()
+            
+            # Save button
+            if st.button("💾 Save Video to Disk (chunked)", type="secondary"):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    total_size = uploaded_file.size
+                    saved_bytes = 0
+                    tmp_path = tempfile.mktemp(suffix=f"_{Path(uploaded_file.name).suffix}")
+                    
+                    status_text.info(f"Saving to temp file: {Path(tmp_path).name}")
+                    
+                    with open(tmp_path, "wb") as f:
+                        uploaded_file.seek(0)
+                        while chunk := uploaded_file.read(1024 * 1024):  # 1MB chunks
+                            f.write(chunk)
+                            saved_bytes += len(chunk)
+                            progress_bar.progress(saved_bytes / total_size)
+                    
+                    st.session_state.temp_video_path = tmp_path
+                    progress_bar.empty()
+                    status_text.success(f"✅ Saved {os.path.getsize(tmp_path)/(1024**3):.2f} GB")
+                    
+                except Exception as e:
+                    st.error(f"Save failed: {str(e)}")
+            
+            # Process saved file
+            if 'temp_video_path' in st.session_state:
+                tmp_path = st.session_state.temp_video_path
+                if os.path.exists(tmp_path):
+                    size_gb = os.path.getsize(tmp_path) / (1024**3)
+                    st.success(f"📁 Ready: {Path(tmp_path).name} ({size_gb:.2f} GB)")
+                    
+                    col1, col2 = st.columns([3,1])
+                    with col1:
+                        if st.button("🚀 Process & Summarize Video", type="primary", use_container_width=True):
+                            process_uploaded_video(tmp_path)
+                    with col2:
+                        if st.button("🗑️ Clear Temp File"):
+                            try:
+                                os.unlink(tmp_path)
+                                del st.session_state.temp_video_path
+                                st.success("Cleaned up temp file")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Cleanup failed: {e}")
+                else:
+                    st.warning("❌ Temp file was deleted/moved")
+                    if 'temp_video_path' in st.session_state:
+                        del st.session_state.temp_video_path
+        else:
+            st.info("📤 Upload a video file to get started")
+
+            
+    except Exception as e:
+        st.error(f"❌ Upload error: {str(e)}")
+        st.code(traceback.format_exc())
 
 
-def process_uploaded_video(uploaded_file, file_size_mb: float):
-    """Process and summarize uploaded video file"""
-    
-    # Check file size limit
-    if file_size_mb > 200:
-        st.error(f"❌ File too large ({file_size_mb:.1f}MB). Maximum size: 200MB")
-        return
+def process_uploaded_video(video_path: str):
+    """Process and summarize uploaded video file from disk path"""
+    from pathlib import Path  # Local import for function scope
     
     # Create progress elements
     progress_bar = st.progress(0)
@@ -382,57 +444,67 @@ def process_uploaded_video(uploaded_file, file_size_mb: float):
         if progress is not None:
             progress_bar.progress(progress)
     
+    st.info(f"🔍 Processing: {Path(video_path).name}")
+    
+    # Early validation
+    if not os.path.exists(video_path):
+        st.error("❌ Temp file missing. Please re-upload.")
+        return
+    
     try:
-        # Process video (extract audio + transcribe)
-        update_progress("🎬 Processing video file...", 20)
+        # Process video (memory efficient)
+        update_progress("🎬 Validating & FFmpeg audio extraction...", 10)
         
         transcript = process_uploaded_file(
-            uploaded_file,
+            video_path,
             whisper_model_size=st.session_state.whisper_size,
             progress_callback=update_progress
         )
         
-        update_progress("✅ Transcription complete!", 60)
+        update_progress("✅ Whisper transcription complete!", 70)
         
         if not transcript or len(transcript.strip()) < 50:
-            st.error("❌ Could not extract meaningful speech from video.")
+            st.error("❌ No speech detected. Try video with clear audio.")
             return
         
-        # Clean transcript
-        update_progress("🧹 Cleaning transcript...", 70)
+        # Clean & cache
         cleaned_transcript = clean_transcript(transcript)
+        cache_key = get_cache_key(f"file_{Path(video_path).name}", st.session_state.selected_model)
         
-        # Generate cache key (using file hash)
-        cache_key = get_cache_key(f"file_{uploaded_file.name}", st.session_state.selected_model)
         cached_summary = check_cache(cache_key)
-        
         if cached_summary:
-            update_progress("📦 Using cached summary", 90)
+            update_progress("📦 Cache hit!", 90)
             summary = cached_summary
         else:
-            # Generate summary
-            update_progress(f"🤖 Generating summary using {st.session_state.selected_model}...", 80)
+            update_progress(f"🤖 AI Summary ({st.session_state.selected_model})...", 80)
             summary = summarize_text(
                 cleaned_transcript,
                 model=st.session_state.selected_model,
                 max_length=st.session_state.summary_length
             )
-            
-            # Save to cache
-            save_to_cache(cache_key, summary, {'source': 'file', 'filename': uploaded_file.name})
+            save_to_cache(cache_key, summary, {'source': 'file', 'filename': Path(video_path).name})
         
-        # Complete
+        # Success
         progress_bar.progress(100)
         status_text.empty()
+        display_summary_results(summary, cleaned_transcript, source='file', filename=Path(video_path).name)
         
-        # Display results
-        display_summary_results(summary, cleaned_transcript, source='file', filename=uploaded_file.name)
-        
+        # Auto cleanup
+        try:
+            os.unlink(video_path)
+            if 'temp_video_path' in st.session_state and st.session_state.temp_video_path == video_path:
+                del st.session_state.temp_video_path
+            st.success("🧹 Temp file auto-cleaned.")
+        except Exception as cleanup_err:
+            st.warning(f"Cleanup warning: {cleanup_err}")
+            
     except Exception as e:
         progress_bar.empty()
         status_text.empty()
         st.error(f"❌ Processing failed: {str(e)}")
-        st.info("Try a shorter video or a different format.")
+        st.info("Tips: `brew install ffmpeg`, add GOOGLE_API_KEY/.env, free disk space, smaller test video.")
+        st.code(str(e), language='text')
+
 
 
 def display_summary_results(summary: str, transcript: str, source: str, **kwargs):

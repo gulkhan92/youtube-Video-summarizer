@@ -44,10 +44,10 @@ class UnsupportedFormatError(FileProcessorError):
 
 
 # Supported video formats
-SUPPORTED_FORMATS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}
+SUPPORTED_FORMATS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}  # .mov already supported for screen recording
 
 
-def validate_video_file(file_name: str, max_size_mb: int = 200) -> None:
+def validate_video_file(file_name: str, max_size_mb: int = 10240) -> None:
     """
     Validate uploaded video file format and size.
     
@@ -80,78 +80,7 @@ def get_file_hash(file_data: bytes) -> str:
     return hashlib.md5(file_data).hexdigest()
 
 
-def extract_audio_from_video(
-    video_path: str, 
-    audio_format: str = 'mp3',
-    progress_callback: Optional[Callable] = None
-) -> str:
-    """
-    Extract audio track from video file.
-    
-    Args:
-        video_path: Path to the video file
-        audio_format: Output audio format ('mp3', 'wav')
-        progress_callback: Optional callback function for progress updates
-        
-    Returns:
-        Path to extracted audio file
-        
-    Raises:
-        AudioExtractionError: If audio extraction fails
-    """
-    
-    if not MOVIEPY_AVAILABLE:
-        raise AudioExtractionError(
-            "moviepy is not installed. Run: pip install moviepy"
-        )
-    
-    audio_path = None
-    
-    try:
-        if progress_callback:
-            progress_callback("Loading video file...")
-        
-        # Load video
-        video = VideoFileClip(video_path)
-        
-        # Get audio duration for progress tracking
-        duration = video.duration
-        
-        # Create temporary audio file
-        audio_path = tempfile.NamedTemporaryFile(
-            delete=False, 
-            suffix=f'.{audio_format}'
-        ).name
-        
-        if progress_callback:
-            progress_callback(f"Extracting audio ({duration:.1f} seconds)...")
-        
-        # Extract and write audio
-        # Use ffmpeg_params for better compatibility
-        video.audio.write_audiofile(
-            audio_path,
-            logger=None,  # Disable moviepy's logger
-            verbose=False,
-            ffmpeg_params=['-ac', '1']  # Convert to mono for better Whisper performance
-        )
-        
-        # Clean up
-        video.close()
-        
-        if progress_callback:
-            progress_callback("Audio extraction complete!")
-        
-        return audio_path
-        
-    except Exception as e:
-        # Clean up partial files
-        if audio_path and os.path.exists(audio_path):
-            try:
-                os.unlink(audio_path)
-            except:
-                pass
-        
-        raise AudioExtractionError(f"Failed to extract audio: {str(e)}")
+
 
 
 def transcribe_audio(
@@ -213,16 +142,17 @@ def transcribe_audio(
 
 
 def process_uploaded_file(
-    uploaded_file,
+    video_path: str,
     whisper_model_size: str = 'base',
-    max_file_size_mb: int = 200,
+    max_file_size_mb: int = 10240,
     progress_callback: Optional[Callable] = None
 ) -> str:
     """
-    Complete pipeline for processing uploaded video file.
+    Complete pipeline for processing video file from disk path.
+    Optimized for large files using FFmpeg.
     
     Args:
-        uploaded_file: Streamlit UploadedFile object
+        video_path: Path to video file on disk
         whisper_model_size: Whisper model size to use
         max_file_size_mb: Maximum allowed file size
         progress_callback: Optional callback for progress updates
@@ -230,44 +160,42 @@ def process_uploaded_file(
     Returns:
         Transcribed text from the video
     """
-    
-    video_path = None
     audio_path = None
     
     try:
-        # Validate file
-        validate_video_file(uploaded_file.name, max_file_size_mb)
+        # Disk space check (~2x file size needed)
+        file_size_bytes = os.path.getsize(video_path)
+        import shutil
+        available_bytes = shutil.disk_usage('/').free
+        if available_bytes < file_size_bytes * 2:
+            raise FileProcessorError(f"Insufficient disk space. Need ~{file_size_bytes*2/(1024**3):.1f}GB available.")
+
         
-        # Check file size
-        uploaded_file.seek(0, 2)  # Seek to end
-        file_size_mb = uploaded_file.tell() / (1024 * 1024)
-        uploaded_file.seek(0)  # Reset to beginning
+        # Validate file first
+        validate_video_file(video_path, max_file_size_mb)
+        
+        file_size_mb = file_size_bytes / (1024 * 1024)
+        
+        if progress_callback:
+            progress_callback(f"✅ Disk OK, size: {file_size_mb:.1f}MB")
         
         if file_size_mb > max_file_size_mb:
             raise UnsupportedFormatError(
                 f"File too large: {file_size_mb:.1f}MB. "
-                f"Maximum size: {max_file_size_mb}MB"
+                f"Max: {max_file_size_mb}MB"
             )
+
         
         if progress_callback:
-            progress_callback(f"File size: {file_size_mb:.1f}MB")
-            progress_callback("Saving uploaded file...")
+            progress_callback("🔄 Extracting audio with FFmpeg...")
         
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_video:
-            tmp_video.write(uploaded_file.read())
-            video_path = tmp_video.name
+        # Extract audio using FFmpeg (memory efficient, fast)
+        audio_path = extract_audio_with_ffmpeg(video_path)
         
         if progress_callback:
-            progress_callback("Extracting audio from video...")
+            progress_callback("✅ Audio extracted, starting transcription...")
         
-        # Extract audio
-        audio_path = extract_audio_from_video(video_path, progress_callback=progress_callback)
-        
-        if progress_callback:
-            progress_callback("Transcribing audio...")
-        
-        # Transcribe
+        # Transcribe with Whisper
         transcript = transcribe_audio(
             audio_path, 
             model_size=whisper_model_size,
@@ -277,13 +205,54 @@ def process_uploaded_file(
         return transcript
         
     finally:
-        # Cleanup temporary files
-        for path in [video_path, audio_path]:
-            if path and os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except:
-                    pass
+        # Cleanup audio temp file
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.unlink(audio_path)
+            except:
+                pass
+
+
+def extract_audio_with_ffmpeg(video_path: str, audio_format: str = 'mp3') -> str:
+    """
+    Extract audio from video using FFmpeg subprocess (memory-efficient).
+    
+    Args:
+        video_path: Input video file path
+        audio_format: Output format ('mp3', 'wav', etc.)
+        
+    Returns:
+        Path to extracted audio file
+    """
+    import subprocess
+    import tempfile
+    
+    audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{audio_format}').name
+    
+    cmd = [
+        'ffmpeg', '-i', video_path,
+        '-vn',  # No video
+        '-acodec', 'mp3',
+        '-ac', '1',  # Mono channel
+        '-ar', '16000',  # Whisper optimal sample rate
+        '-y',  # Overwrite
+        audio_path
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            raise AudioExtractionError(
+                f"FFmpeg failed: {result.stderr}. Install with: brew install ffmpeg"
+            )
+        
+        return audio_path
+        
+    except subprocess.TimeoutExpired:
+        raise AudioExtractionError("FFmpeg timeout - video too long or corrupted")
+    except FileNotFoundError:
+        raise AudioExtractionError("FFmpeg not found. Install with: brew install ffmpeg")
 
 
 # Simple test function

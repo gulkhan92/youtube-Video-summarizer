@@ -79,7 +79,7 @@ class BaseSummarizer(ABC):
 class GeminiSummarizer(BaseSummarizer):
     """Summarizer using Google's Gemini API"""
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-1.0-pro"):
         """
         Initialize Gemini summarizer.
         
@@ -289,9 +289,10 @@ def get_summarizer(model_type: str = "gemini") -> BaseSummarizer:
     if model_type == "gemini":
         try:
             return GeminiSummarizer()
-        except (APIKeyError, ModelNotAvailableError) as e:
-            print(f"Gemini not available: {e}. Falling back to local.")
+        except:
+            print("Gemini unavailable - using local summarizer.")
             return SimpleLocalSummarizer()
+
     
     elif model_type == "openai":
         try:
