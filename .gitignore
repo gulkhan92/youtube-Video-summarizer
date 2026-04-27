@@ -1,1 +1,35 @@
+# Environment variables (API keys)
 .env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated output files
+*_transcript.txt
+*_summary.txt
+summary.txt
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Cache
+cache/

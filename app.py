@@ -562,8 +562,7 @@ def display_summary_results(summary: str, transcript: str, source: str, **kwargs
             <div class="stats-number">{model_display}</div>
             <div class="stats-label">Model Used</div>
         </div>
-        """, unsafe_allow_html=True)
-    
+        """, unsafe_allow_html=True)    
     # Summary container
     st.markdown("### 📝 Video Summary")
     st.markdown(f"""
