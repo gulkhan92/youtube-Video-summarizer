@@ -219,6 +219,7 @@ youtube-Video-summarizer/
 ├── requirements.txt           # Python dependencies
 ├── .gitignore                 # Version control exclusions
 ├── README.md                  # Project documentation
+├── pytest.ini                # pytest configuration
 ├── cache/                     # Persistent summary cache directory
 │   └── summaries.json
 ├── modules/
@@ -227,6 +228,12 @@ youtube-Video-summarizer/
 │   ├── file_processor.py      # Audio extraction & Whisper transcription
 │   ├── summarizer.py          # LLM abstraction layer
 │   └── utils.py               # Caching, cleaning, helpers
+├── tests/
+│   ├── __init__.py
+│   ├── test_youtube.py        # YouTube module tests (infra)
+│   ├── test_file_processor.py # File processor tests (infra)
+│   ├── test_utils.py          # Utility & cache tests (infra)
+│   └── test_summarizer.py     # Summarizer tests (AI + local)
 └── .env                       # API keys (not tracked by git)
 ```
 
@@ -300,6 +307,69 @@ summary = summarize_text(
     max_length=300
 )
 ```
+
+---
+
+## Testing
+
+A comprehensive test suite covers both **infrastructure** (data validation, file processing, caching) and **AI** (summarization, model fallbacks, prompt formatting) sides of the application.
+
+### Test Structure
+
+| Test File | Coverage Area | Test Count |
+|-----------|--------------|------------|
+| `tests/test_youtube.py` | URL extraction/validation, transcript fetching, error handling | ~25 tests |
+| `tests/test_file_processor.py` | File validation, FFmpeg audio extraction, Whisper transcription, full pipeline | ~35 tests |
+| `tests/test_utils.py` | Text cleaning, cache read/write, cache expiry, reading-time estimation, helpers | ~30 tests |
+| `tests/test_summarizer.py` | Local summarizer, Gemini (new + legacy SDK), OpenAI, factory logic, prompts, exceptions | ~25 tests |
+
+### Running Tests
+
+Install test dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Run the full suite:
+```bash
+pytest tests/ -v
+```
+
+Run a specific module:
+```bash
+pytest tests/test_youtube.py -v
+pytest tests/test_file_processor.py -v
+pytest tests/test_utils.py -v
+pytest tests/test_summarizer.py -v
+```
+
+### Infra Tests (Data Validation & Processing)
+
+These tests verify core data-handling logic **without requiring API keys** or external services:
+
+- **YouTube URL validation** — Standard, short (`youtu.be`), embed, and Shorts URLs accepted; malformed URLs rejected
+- **Transcript cleaning** — Bracketed annotations `[Music]`, extra whitespace, and punctuation artifacts removed; sentence capitalization applied
+- **Cache operations** — Key generation, save/load, automatic 7-day expiry, and clear-all functionality
+- **File validation** — Supported formats (`.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, `.m4v`) accepted; unsupported formats rejected
+- **Hash generation** — MD5 hashing for cache key derivation
+- **Reading-time estimation** — Accurate word-count → minute conversion
+
+### AI Tests (Summarization & LLM Integration)
+
+These tests exercise the summarization layer with **mocked API calls** and local fallbacks:
+
+- **Local summarizer** — Extractive summarization on short/long transcripts, empty-input handling, bullet-point extraction
+- **Gemini (new SDK)** — Prompt formatting, response parsing, empty/short transcript guards, model initialization with API key
+- **Gemini (legacy SDK)** — Same coverage as new SDK via `google-generativeai` path
+- **OpenAI summarizer** — Chat-completion call structure, temperature and max-tokens settings, fallback on missing key
+- **Factory (`get_summarizer`)** — Correct model routing, graceful degradation from Gemini → OpenAI → local, unknown-model error
+- **Exception handling** — `APIKeyError`, `ModelNotAvailableError`, `SummarizerError` raised and caught appropriately
+
+### Continuous Integration Notes
+
+- All API-dependent tests mock external HTTP calls, so the suite runs **offline** after dependencies are installed.
+- FFmpeg and Whisper are optionally mocked to avoid heavy binary dependencies in CI.
+- Cache files are written to a temporary directory during test execution and cleaned up automatically.
 
 ---
 
