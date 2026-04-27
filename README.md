@@ -8,26 +8,6 @@
 
 ---
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture & Flow](#architecture--flow)
-- [Features](#features)
-- [System Requirements](#system-requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [Streamlit Web Application](#streamlit-web-application)
-  - [Command-Line Interface](#command-line-interface)
-- [Project Structure](#project-structure)
-- [Process Flow](#process-flow)
-- [API Reference](#api-reference)
-- [Performance Considerations](#performance-considerations)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
-
----
-
 ## Overview
 
 **Video Summarizer Pro** is a production-ready Python application that automatically extracts transcripts from YouTube videos and uploaded video files, then generates intelligent summaries using state-of-the-art Large Language Models (LLMs).
